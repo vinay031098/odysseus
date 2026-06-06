@@ -35,6 +35,10 @@ from dotenv import load_dotenv
 # utf-8-sig reads plain UTF-8 (no BOM) identically, so this is safe everywhere.
 load_dotenv(encoding="utf-8-sig")
 
+# v2 (React SPA in frontend/dist) is the default. Set ODYSSEUS_UI=v1 for the
+# legacy static/ UI — retained as an escape hatch; see MIGRATION.md.
+UI_MODE = os.getenv("ODYSSEUS_UI", "v2").strip().lower() or "v2"
+
 import asyncio
 import logging
 import secrets
@@ -173,6 +177,8 @@ if AUTH_ENABLED:
         "/login",
     }
     AUTH_EXEMPT_PREFIXES = ["/static"]
+    if UI_MODE == "v2":
+        AUTH_EXEMPT_PREFIXES.append("/assets")
     # Dynamic paths whose own handler proves identity via a path-embedded
     # secret instead of the session/bearer auth. The route handler at
     # routes/task_routes.py validates the per-task `webhook_token` itself
@@ -383,6 +389,33 @@ class _RevalidatingStatic(StaticFiles):
 
 
 app.mount("/static", _RevalidatingStatic(directory="static"), name="static")
+
+# ========= FRONTEND V2 (React SPA) =========
+FRONTEND_DIST_DIR = os.path.join(BASE_DIR, "frontend", "dist")
+
+
+def _ui_v2_enabled() -> bool:
+    return UI_MODE == "v2"
+
+
+def _serve_v2_spa() -> HTMLResponse:
+    index_path = os.path.join(FRONTEND_DIST_DIR, "index.html")
+    if not os.path.isfile(index_path):
+        raise HTTPException(
+            503,
+            "v2 UI not built. Run: cd frontend && npm install && npm run build",
+        )
+    with open(index_path, "r", encoding="utf-8") as f:
+        return HTMLResponse(f.read())
+
+
+if _ui_v2_enabled():
+    _v2_assets_dir = os.path.join(FRONTEND_DIST_DIR, "assets")
+    if os.path.isdir(_v2_assets_dir):
+        app.mount("/assets", StaticFiles(directory=_v2_assets_dir), name="frontend_assets")
+    logger.info("Serving Odysseus UI v2 from %s", FRONTEND_DIST_DIR)
+else:
+    logger.info("Serving Odysseus UI v1 (legacy static/). Default is v2 — unset ODYSSEUS_UI or set ODYSSEUS_UI=v2.")
 
 # ========= GENERATED IMAGES =========
 @app.get("/api/generated-image/{filename}")
@@ -733,6 +766,8 @@ def _serve_html_with_nonce(request: Request, file_path: str) -> HTMLResponse:
 
 @app.get("/")
 async def serve_index(request: Request):
+    if _ui_v2_enabled():
+        return _serve_v2_spa()
     static_path = abs_join(BASE_DIR, "static/index.html")
     if os.path.exists(static_path):
         return _serve_html_with_nonce(request, static_path)
@@ -777,13 +812,45 @@ async def serve_tasks(request: Request):
 async def serve_library(request: Request):
     return await serve_index(request)
 
+@app.get("/chat")
+@app.get("/chat/{session_id}")
+async def serve_chat(request: Request, session_id: str | None = None):
+    return await serve_index(request)
+
+@app.get("/settings")
+async def serve_settings(request: Request):
+    return await serve_index(request)
+
+@app.get("/agents")
+async def serve_agents(request: Request):
+    return await serve_index(request)
+
+@app.get("/group-chat")
+async def serve_group_chat(request: Request):
+    return await serve_index(request)
+
+@app.get("/compare")
+async def serve_compare(request: Request):
+    return await serve_index(request)
+
+@app.get("/research")
+async def serve_research(request: Request):
+    return await serve_index(request)
+
 @app.get("/backgrounds")
 async def serve_backgrounds(request: Request):
-    """Sandbox page for prototyping background effects. No auth required."""
-    return _serve_html_with_nonce(request, abs_join(BASE_DIR, "static/backgrounds.html"))
+    """Sandbox page for prototyping background effects."""
+    if _ui_v2_enabled():
+        return _serve_v2_spa()
+    backgrounds_path = abs_join(BASE_DIR, "static/backgrounds.html")
+    if os.path.exists(backgrounds_path):
+        return _serve_html_with_nonce(request, backgrounds_path)
+    return await serve_index(request)
 
 @app.get("/login")
 async def serve_login(request: Request):
+    if _ui_v2_enabled():
+        return _serve_v2_spa()
     return _serve_html_with_nonce(request, abs_join(BASE_DIR, "static/login.html"))
 
 @app.get("/api/version")
@@ -825,6 +892,28 @@ async def runtime_info() -> Dict[str, object]:
         "in_docker": in_docker,
         "ollama_base_url": ollama_url,
     }
+
+
+@app.get("/{full_path:path}")
+async def serve_v2_spa_fallback(full_path: str):
+    """Serve index.html for unknown v2 client routes (React Router deep links).
+
+    Registered last so explicit /api routes and static mounts win. Never hijack
+    /api, /static, or /assets — those must 404 when missing, not return HTML.
+    """
+    if not _ui_v2_enabled():
+        raise HTTPException(status_code=404)
+    if full_path == "api" or full_path.startswith("api/"):
+        raise HTTPException(status_code=404)
+    if full_path == "static" or full_path.startswith("static/"):
+        raise HTTPException(status_code=404)
+    if full_path == "assets" or full_path.startswith("assets/"):
+        raise HTTPException(status_code=404)
+    if full_path and ".." not in full_path:
+        candidate = os.path.join(FRONTEND_DIST_DIR, full_path)
+        if os.path.isfile(candidate):
+            return FileResponse(candidate)
+    return _serve_v2_spa()
 
 # ========= LIFECYCLE =========
 

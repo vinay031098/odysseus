@@ -1,5 +1,7 @@
 # Module Organization Summary
 
+> **Stale documentation (Wave 28):** This file is a **partial, historical overview** — not an authoritative inventory of the legacy UI. It is **not kept in sync** with the current `static/js/` tree or `static/index.html` script list. For v2 migration status and an honest parity matrix, see [MIGRATION.md](../../MIGRATION.md) and [frontend/README.md](../../frontend/README.md). For v1 module discovery, browse `static/js/` directly.
+
 ## Purpose
 This document describes what each JavaScript module is responsible for.
 

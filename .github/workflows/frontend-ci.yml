@@ -1,0 +1,141 @@
+name: Frontend CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/frontend-ci.yml'
+  pull_request:
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/frontend-ci.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: frontend-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Build, lint, test, e2e
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - name: Install canvas system dependencies (Vitest/jsdom)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run test:run
+      - run: npm run build
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Playwright smoke (SPA preview, no backend)
+        env:
+          PLAYWRIGHT_BASE_URL: http://127.0.0.1:4173
+          # Authenticated @auth specs run in backend-e2e when ODYSSEUS_E2E_PASSWORD secret is set.
+        run: npx playwright test e2e/smoke.spec.ts --grep-invert @auth
+
+  # ---------------------------------------------------------------------------
+  # Optional: OpenAPI type generation (requires a running Odysseus backend)
+  #
+  # Enable by setting repository variable OPENAPI_CODEGEN=true, then uncomment
+  # this job. It starts uvicorn briefly, runs `npm run codegen`, and fails if
+  # src/api/generated/schema.ts drifts from the committed copy.
+  #
+  # Local equivalent (backend already running on :7860):
+  #   cd frontend && npm run codegen
+  # ---------------------------------------------------------------------------
+  # openapi-codegen:
+  #   name: OpenAPI types drift check
+  #   if: vars.OPENAPI_CODEGEN == 'true'
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+  #     - uses: actions/setup-python@8d9335d562bbd8858c9411c5813d884159a4c61  # v5
+  #       with:
+  #         python-version: '3.12'
+  #         cache: pip
+  #     - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
+  #       with:
+  #         node-version: '20'
+  #         cache: npm
+  #         cache-dependency-path: frontend/package-lock.json
+  #     - name: Install Python dependencies
+  #       run: pip install -r requirements.txt
+  #     - name: Install frontend dependencies
+  #       working-directory: frontend
+  #       run: npm ci
+  #     - name: Start Odysseus backend
+  #       run: |
+  #         python -m uvicorn app:app --host 127.0.0.1 --port 7860 &
+  #         for i in $(seq 1 60); do
+  #           curl -sf http://127.0.0.1:7860/openapi.json >/dev/null && break
+  #           sleep 2
+  #         done
+  #     - name: Generate OpenAPI types
+  #       working-directory: frontend
+  #       run: npm run codegen
+  #     - name: Fail on schema drift
+  #       run: git diff --exit-code frontend/src/api/generated/schema.ts
+
+  # Authenticated e2e against a live Odysseus backend.
+  #
+  # Requires repository secret ODYSSEUS_E2E_PASSWORD (must match admin password).
+  # Optional: ODYSSEUS_E2E_USER (defaults to admin in Playwright helpers).
+  #
+  # Local equivalent:
+  #   PLAYWRIGHT_BASE_URL=http://127.0.0.1:7860 ODYSSEUS_E2E_PASSWORD='…' npm run e2e
+  backend-e2e:
+    name: Authenticated e2e (backend + Playwright)
+    if: secrets.ODYSSEUS_E2E_PASSWORD != ''
+    runs-on: ubuntu-latest
+    needs: frontend
+    env:
+      ODYSSEUS_ADMIN_PASSWORD: ${{ secrets.ODYSSEUS_E2E_PASSWORD }}
+      ODYSSEUS_E2E_PASSWORD: ${{ secrets.ODYSSEUS_E2E_PASSWORD }}
+      ODYSSEUS_E2E_USER: ${{ secrets.ODYSSEUS_E2E_USER }}
+      PLAYWRIGHT_BASE_URL: http://127.0.0.1:7860
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: actions/setup-python@8d9335d562bbd8858c9411c5813d884159a4c61  # v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+      - name: Build frontend bundle
+        working-directory: frontend
+        run: npm ci && npm run build
+      - name: Start Odysseus backend
+        run: |
+          python -m uvicorn app:app --host 127.0.0.1 --port 7860 &
+          for i in $(seq 1 60); do
+            curl -sf http://127.0.0.1:7860/api/health >/dev/null && exit 0
+            sleep 2
+          done
+          echo "Backend failed to become healthy on :7860" >&2
+          exit 1
+      - name: Install Playwright Chromium
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+      - name: Playwright authenticated e2e
+        working-directory: frontend
+        run: npx playwright test e2e/ --grep @auth

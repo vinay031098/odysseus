@@ -49,6 +49,29 @@ Defaults work out of the box: clone, run, then configure models/search/email
 inside **Settings**. Only edit `.env` for deployment-level overrides like
 `APP_BIND`, `APP_PORT`, `AUTH_ENABLED`, `DATABASE_URL`, or a pre-seeded admin password.
 
+### UI v2 (default)
+
+Odysseus serves the **React UI** from `frontend/dist/` by default. Build it once:
+
+```bash
+cd frontend && npm install && npm run build
+```
+
+Then start the backend (no env var needed):
+
+```bash
+./start-macos.sh          # macOS — auto-builds frontend if dist/ is missing
+python -m uvicorn app:app --host 127.0.0.1 --port 7860
+```
+
+Frontend development (hot reload): `cd frontend && npm run dev` → http://127.0.0.1:5173
+
+See [frontend/README.md](frontend/README.md) for scripts and wave status. Legacy UI: `ODYSSEUS_UI=v1` — see [MIGRATION.md](MIGRATION.md).
+
+**UI v2 waves:** Waves **0–28** are complete at ~**80%** legacy parity (routes ~98%). v2 covers chat agent depth, MVP document/gallery editors, full cookbook, themes/PWA, workspace depth, core slash commands, email/settings/agents polish, and compare/research extras. Deep canvas editors and slash-command long tail remain partial. [frontend CI](.github/workflows/frontend-ci.yml) is ready (untracked until committed). **`static/` is not removed.** Matrix and cutover criteria: [MIGRATION.md](MIGRATION.md).
+
+**E2E in CI:** Frontend CI runs unauthenticated Playwright smoke against the built SPA. Set repository secret **`ODYSSEUS_E2E_PASSWORD`** (must match admin password; optional **`ODYSSEUS_E2E_USER`**) to run the **`backend-e2e`** job with full authenticated route smoke — see [MIGRATION.md](MIGRATION.md#e2e-smoke--ci).
+
 On first setup, Odysseus creates an admin account (`admin` unless
 `ODYSSEUS_ADMIN_USER` is set) and prints a temporary password in the terminal.
 For Docker installs, the same line is in `docker compose logs odysseus`.

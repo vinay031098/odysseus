@@ -161,6 +161,20 @@ fi
 echo "▶ Preparing Odysseus…"
 ODYSSEUS_SKIP_RUN_HINT=1 ./venv/bin/python setup.py
 
+# 4b. React UI (v2 is default). Build frontend/dist on first run if missing.
+UI_MODE_EFFECTIVE="${ODYSSEUS_UI:-v2}"
+if [ "$UI_MODE_EFFECTIVE" != "v1" ] && [ ! -f frontend/dist/index.html ]; then
+  if command -v npm >/dev/null 2>&1; then
+    echo "▶ Building React UI (frontend/dist missing — first run)…"
+    (cd frontend && (npm ci --silent 2>/dev/null || npm install --silent) && npm run build)
+  else
+    echo "✗ UI v2 requires frontend/dist. Install Node.js 20+, then:"
+    echo "    cd frontend && npm install && npm run build"
+    echo "  Or use legacy UI: ODYSSEUS_UI=v1 ./start-macos.sh"
+    exit 1
+  fi
+fi
+
 # 5. Launch. Bind to loopback by default; opt into LAN/Tailscale with
 #    ODYSSEUS_HOST=0.0.0.0.
 URL_HOST="$HOST"
